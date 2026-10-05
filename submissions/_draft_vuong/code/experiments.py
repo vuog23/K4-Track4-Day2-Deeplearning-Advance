@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import shutil
 from pathlib import Path
@@ -26,17 +27,57 @@ BACKBONES = [
 ]
 
 
-def run_budget_pilot(batch_size=16, img_size=224, out_csv="results/budget_pilot.csv",
+def _release_cuda_memory():
+    """Release cached memory between independent runs (useful on Kaggle T4s)."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def run_budget_pilot(batch_size=8, img_size=224, out_csv="results/budget_pilot.csv",
                      out_dir="runs_budget", pred_dir="predictions_budget", num_workers=2,
                      epochs=10):
     """Time one epoch of each planned backbone and estimate the full 20-run budget."""
+    csv_path = Path(out_csv)
+    if not csv_path.is_absolute():
+        csv_path = REPO_ROOT / csv_path
+    previous = {}
+    if csv_path.exists():
+        try:
+            previous = {str(r["exp_id"]): r for r in pd.read_csv(csv_path).to_dict("records")}
+        except (pd.errors.EmptyDataError, KeyError, ValueError):
+            previous = {}
     rows = []
     for i, backbone in enumerate(BACKBONES, 1):
-        rows.append(run(Config(exp_id=f"Q{i:02d}", backbone=backbone, seed=0,
-                               batch_size=batch_size, epochs=1, img_size=img_size, amp=True,
-                               out_dir=out_dir, pred_dir=pred_dir, num_workers=num_workers)))
-        Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        exp_id = f"Q{i:02d}"
+        run_path = REPO_ROOT / out_dir / exp_id / "seed0"
+        config_path = run_path / "config.json"
+        reusable = False
+        if exp_id in previous and config_path.exists():
+            try:
+                saved = json.loads(config_path.read_text(encoding="utf-8"))["config"]
+                reusable = (
+                    saved.get("backbone") == backbone and saved.get("seed") == 0
+                    and saved.get("epochs") == 1 and saved.get("batch_size") == batch_size
+                    and saved.get("img_size") == img_size
+                    and saved.get("num_workers") == num_workers
+                    and all((run_path / name).is_file() for name in
+                            ("best.pt", "history.csv", "val_logits.npy", "val_labels.npy"))
+                )
+            except (KeyError, OSError, ValueError, TypeError):
+                reusable = False
+        if reusable:
+            print(f"Reusing completed {exp_id} ({backbone}) from this pilot.", flush=True)
+            row = previous[exp_id]
+        else:
+            print(f"Starting {exp_id}/{len(BACKBONES)}: {backbone} (one epoch)", flush=True)
+            row = run(Config(exp_id=exp_id, backbone=backbone, seed=0,
+                             batch_size=batch_size, epochs=1, img_size=img_size, amp=True,
+                             out_dir=out_dir, pred_dir=pred_dir, num_workers=num_workers))
+            _release_cuda_memory()
+        rows.append(row)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
     frame = pd.DataFrame(rows)
     mean_epoch_seconds = float(frame.seconds_per_epoch.mean())
     # 5 backbone runs + 9 single-backbone ablations + 6 final/baseline runs.
@@ -51,6 +92,7 @@ def run_backbones(out_csv="results/backbones.csv", batch_size=8, epochs=12, img_
                   out_dir="runs", pred_dir="predictions", num_workers=2):
     rows = []
     for i, backbone in enumerate(BACKBONES, 1):
+        print(f"Starting B{i:02d}/{len(BACKBONES)}: {backbone}", flush=True)
         row = run(Config(exp_id=f"B{i:02d}", backbone=backbone, seed=0, batch_size=batch_size,
                          epochs=epochs, img_size=img_size, amp=True, out_dir=out_dir,
                          pred_dir=pred_dir, num_workers=num_workers))
@@ -72,6 +114,8 @@ def run_backbones(out_csv="results/backbones.csv", batch_size=8, epochs=12, img_
         rows.append(row)
         Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_csv(out_csv, index=False)
+        del net, base_net
+        _release_cuda_memory()
     return pd.DataFrame(rows)
 
 
@@ -95,6 +139,7 @@ def run_training_ablation(backbone: str, out_csv="results/training.csv", batch_s
     ]
     rows = []
     for exp_id, axis, changes in runs:
+        print(f"Starting {exp_id}: {axis}", flush=True)
         row = run(Config(exp_id=exp_id, backbone=backbone, seed=0, batch_size=batch_size,
                          epochs=epochs, img_size=img_size, out_dir=out_dir,
                          pred_dir=pred_dir, num_workers=num_workers, **changes))
@@ -103,6 +148,7 @@ def run_training_ablation(backbone: str, out_csv="results/training.csv", batch_s
         rows.append(row)
         Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_csv(out_csv, index=False)
+        _release_cuda_memory()
     # Explicit interaction test: combine the validation-best augmentation and
     # loss variants with balanced sampling. T00 remains the shared baseline.
     by_id = {r["exp_id"]: r for r in rows}
@@ -119,6 +165,7 @@ def run_training_ablation(backbone: str, out_csv="results/training.csv", batch_s
     combo["axis"] = "B+C+D: combined interaction"
     rows.append(combo)
     pd.DataFrame(rows).to_csv(out_csv, index=False)
+    _release_cuda_memory()
     return pd.DataFrame(rows)
 
 
@@ -137,6 +184,7 @@ def run_final_comparison(backbone: str, final_recipe: dict | None = None, seeds=
     rows = []
     Path("results").mkdir(parents=True, exist_ok=True)
     for seed in seeds:
+        print(f"Starting final F01/T00 comparison for seed {seed}", flush=True)
         final_row = run(Config(exp_id="F01", backbone=backbone, seed=int(seed),
                                batch_size=batch_size, epochs=epochs, img_size=img_size,
                                out_dir=out_dir, pred_dir=pred_dir, num_workers=num_workers,
@@ -166,6 +214,7 @@ def run_final_comparison(backbone: str, final_recipe: dict | None = None, seeds=
         final_row["inference_method"] = "I00 one-view + temperature scaling fitted on val"
         final_row["recipe_config"] = json.dumps(final_recipe, ensure_ascii=False, sort_keys=True)
         rows.append({**final_row, "recipe": "selected validation recipe"})
+        _release_cuda_memory()
         baseline_row = run(Config(exp_id="T00", backbone=backbone, seed=int(seed),
                                   batch_size=batch_size, epochs=epochs, img_size=img_size,
                                   out_dir=out_dir, pred_dir=pred_dir, num_workers=num_workers,
@@ -173,6 +222,7 @@ def run_final_comparison(backbone: str, final_recipe: dict | None = None, seeds=
         baseline_row["inference_method"] = "I00 one-view (uncalibrated baseline)"
         baseline_row["recipe_config"] = "T00 default recipe"
         rows.append({**baseline_row, "recipe": "T00 baseline"})
+        _release_cuda_memory()
         pd.DataFrame(rows).to_csv(Path("results") / "final_runs.csv", index=False)
     return pd.DataFrame(rows)
 
