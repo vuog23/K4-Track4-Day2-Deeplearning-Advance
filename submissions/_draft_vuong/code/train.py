@@ -346,7 +346,10 @@ def run(cfg: Config) -> dict:
         start = time.perf_counter()
         train_stats = train_one_epoch(net, train_loader, criterion, optimizer, scheduler,
                                       scaler, cfg, device, ema)
-        eval_model = ema.module if ema is not None else net
+        # Keep DataParallel for training, but evaluate the underlying model on the
+        # primary GPU. This avoids scatter/gather kernels during validation and
+        # is more robust for small or architecture-specific batches.
+        eval_model = ema.module if ema is not None else base_net
         _, y_val, val_logits, val_loss = evaluate(eval_model, val_loader, criterion, device)
         val_probs = torch.softmax(torch.from_numpy(val_logits), dim=1).numpy()
         metrics = compute_metrics(y_val, val_probs.argmax(1), val_probs)
@@ -376,14 +379,14 @@ def run(cfg: Config) -> dict:
         checkpoint = torch.load(best_ckpt, map_location=device)
     base_net.load_state_dict(checkpoint["model"])
     net.eval()
-    _, y_val, val_logits, _ = evaluate(net, val_loader, criterion, device)
+    _, y_val, val_logits, _ = evaluate(base_net, val_loader, criterion, device)
     np.save(run_path / "val_logits.npy", val_logits)
     np.save(run_path / "val_labels.npy", y_val)
     val_probs = torch.softmax(torch.from_numpy(val_logits), dim=1).numpy()
     best_metrics = compute_metrics(y_val, val_probs.argmax(1), val_probs)
     save_predictions(pred_dir / pred_path(cfg, "val").name, val_df.Filename.astype(str).tolist(), y_val, val_probs)
     if test_loader is not None:
-        _, y_test, test_logits, _ = evaluate(net, test_loader, criterion, device)
+        _, y_test, test_logits, _ = evaluate(base_net, test_loader, criterion, device)
         np.save(run_path / "test_logits.npy", test_logits)
         np.save(run_path / "test_labels.npy", y_test)
         test_probs = torch.softmax(torch.from_numpy(test_logits), dim=1).numpy()
