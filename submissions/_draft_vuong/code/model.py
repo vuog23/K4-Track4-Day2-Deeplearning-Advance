@@ -47,8 +47,21 @@ def build_model(name: str, pretrained: bool = True, num_classes: int = 9,
     if init not in {"scratch", "frozen", "finetune"}:
         raise ValueError(f"init không hỗ trợ: {init}")
     use_pretrained = bool(pretrained and init != "scratch")
+    create_kwargs = {}
+    if use_pretrained:
+        # Kaggle's unauthenticated HF Hub downloads can stall on large sharded
+        # checkpoints. Prefer timm's official direct URL when the model has one.
+        try:
+            pretrained_cfg = timm.get_pretrained_cfg(name)
+        except (AttributeError, KeyError, TypeError):
+            pretrained_cfg = None
+        if pretrained_cfg is not None:
+            url = (pretrained_cfg.get("url", "") if isinstance(pretrained_cfg, dict)
+                   else getattr(pretrained_cfg, "url", ""))
+            if url:
+                create_kwargs["pretrained_cfg_overlay"] = {"hf_hub_id": ""}
     model = timm.create_model(name, pretrained=use_pretrained, num_classes=num_classes,
-                              drop_rate=drop_rate)
+                              drop_rate=drop_rate, **create_kwargs)
     if init == "frozen":
         freeze_backbone(model)
     model._lab_backbone_name = name

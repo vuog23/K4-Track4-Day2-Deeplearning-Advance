@@ -184,7 +184,11 @@ def train_one_epoch(model, loader, criterion, optimizer, scheduler, scaler, cfg:
     total, seen = 0.0, 0
     scaler_enabled = bool(cfg.amp and device.type == "cuda")
     scaler = scaler or torch.cuda.amp.GradScaler(enabled=scaler_enabled)
-    for images, targets, _ in loader:
+    total_batches = len(loader)
+    progress_every = max(total_batches // 5, 1)
+    for step, (images, targets, _) in enumerate(loader, start=1):
+        if step == 1 or step % progress_every == 0 or step == total_batches:
+            print(f"{cfg.exp_id} training batch {step}/{total_batches}", flush=True)
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
