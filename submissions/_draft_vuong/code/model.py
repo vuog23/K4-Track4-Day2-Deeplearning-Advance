@@ -26,6 +26,7 @@ SUGGESTED_BACKBONES = {
     "swin_tiny": "swin_tiny_patch4_window7_224",
     "efficientnet_b0": "efficientnet_b0",        # mạng nhẹ
     "mobilenetv3": "mobilenetv3_large_100",      # mạng nhẹ
+    "regnety_004": "regnety_004",                # mạng nhẹ
 }
 
 

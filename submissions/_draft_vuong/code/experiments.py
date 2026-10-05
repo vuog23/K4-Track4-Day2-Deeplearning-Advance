@@ -23,7 +23,7 @@ from eval import save_predictions
 
 BACKBONES = [
     "resnet50", "resnext50_32x4d", "deit_small_patch16_224", "resnet18",
-    "mobilenetv3_large_100",
+    "regnety_004",
 ]
 
 
