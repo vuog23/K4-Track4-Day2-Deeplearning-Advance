@@ -114,7 +114,7 @@ def run_backbones(out_csv="results/backbones.csv", batch_size=8, epochs=12, img_
         rows.append(row)
         Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_csv(out_csv, index=False)
-        del net, base_net
+        del net
         _release_cuda_memory()
     return pd.DataFrame(rows)
 
