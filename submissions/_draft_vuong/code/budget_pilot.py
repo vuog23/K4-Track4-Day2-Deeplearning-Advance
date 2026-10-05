@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--prefix", default="Q")
     args = parser.parse_args()
     models = ["resnet50", "resnext50_32x4d", "deit_small_patch16_224",
-              "efficientnet_b0", "mobilenetv3_large_100"]
+              "resnet18", "mobilenetv3_large_100"]
     rows = []
     for i, backbone in enumerate(models, 1):
         cfg = Config(exp_id=f"{args.prefix}{i:02d}", backbone=backbone, seed=0, epochs=1,

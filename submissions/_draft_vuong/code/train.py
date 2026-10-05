@@ -185,7 +185,7 @@ def train_one_epoch(model, loader, criterion, optimizer, scheduler, scaler, cfg:
     scaler_enabled = bool(cfg.amp and device.type == "cuda")
     scaler = scaler or torch.cuda.amp.GradScaler(enabled=scaler_enabled)
     total_batches = len(loader)
-    progress_every = max(total_batches // 5, 1)
+    progress_every = max(total_batches // 20, 1)
     for step, (images, targets, _) in enumerate(loader, start=1):
         if step == 1 or step % progress_every == 0 or step == total_batches:
             print(f"{cfg.exp_id} training batch {step}/{total_batches}", flush=True)
